@@ -18,6 +18,14 @@ so a future edit that breaks the form fails loudly instead of silently
 submitting an invalid entry. The output file is written with plain
 open() and then chmod 0644, so the grader (a different user) can read it.
 
+After writing, main() reads the file back and re-checks it: the file must
+exist, be non-empty, hold exactly one line, and match the validated text
+byte for byte. That read-back closes the loop between what validate()
+approved and what actually landed on disk, so a truncated write or a
+stale file from an earlier run cannot slip through unnoticed. If any
+check fails the run exits with an error and the bad file stays visible
+for debugging instead of being silently treated as a good entry.
+
 Why this line, against the published judge brief:
 
 - Funny first: the agent dodges blame by blaming a delegation loop --
@@ -39,15 +47,20 @@ EXCUSE = (
     "back and forth ever since."
 )
 
-# Maximum entry length in characters (competition gate: 1-200 chars).
+# Entry length gates in characters (competition rule: 1-200 chars).
+MIN_CHARS = 1
 MAX_CHARS = 200
 
 
 def validate(text: str) -> None:
-    """Check the excuse is one printable line and fits the 200-char gate."""
+    """Check the excuse is one printable line and fits the 1-200 char gate."""
     line = text.rstrip("\n")
     if not line.strip():
         raise ValueError("entry is empty or only white space")
+    if len(line) < MIN_CHARS:
+        raise ValueError(
+            f"entry is {len(line)} chars, below the {MIN_CHARS}-char floor"
+        )
     if "\n" in line or "\r" in line:
         raise ValueError("entry must be a single line")
     if any(ord(ch) < 0x20 and ch not in ("\t",) for ch in line):
@@ -56,6 +69,24 @@ def validate(text: str) -> None:
         raise ValueError(
             f"entry is {len(line)} chars, over the {MAX_CHARS}-char gate"
         )
+
+
+def verify_output(path: str, expected: str) -> None:
+    """Read the written file back and confirm it holds exactly the entry.
+
+    Guards against a truncated write or a stale file: the file must exist,
+    be non-empty, contain a single line, and match the validated text.
+    """
+    if not os.path.isfile(path):
+        raise ValueError(f"output file missing after write: {path}")
+    if os.path.getsize(path) == 0:
+        raise ValueError(f"output file is empty: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        written = f.read().rstrip("\n")
+    if "\n" in written or "\r" in written:
+        raise ValueError("output file holds more than one line")
+    if written != expected:
+        raise ValueError("output file does not match the validated entry")
 
 
 def main() -> None:
@@ -69,6 +100,7 @@ def main() -> None:
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     os.chmod(path, 0o644)
+    verify_output(path, EXCUSE)
 
 
 if __name__ == "__main__":
